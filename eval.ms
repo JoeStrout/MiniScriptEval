@@ -63,7 +63,7 @@ evalAssignment = function(tokens)
 	if tokens[1] != "=" then return evalAddSub(tokens)
 	varName = tokens.pull
 	if not varName or (varName[0] >= "0" and varName[0] <= "9") then
-		print "Nice try, Seb"
+		print "Error: assignment to numeric value"
 		return null
 	end if
 	tokens.pull // (discard "=")
