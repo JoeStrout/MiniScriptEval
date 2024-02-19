@@ -1,48 +1,50 @@
-// Expression Evaluator
-//
-// This module provides an `eval` function which, given a string 
-// containing a numeric expression, returns the numeric value.
-// Example: `eval("4+3*5")` returns 19.
-//
-// Also supports variable assignment (e.g. "x=42") and use ("3*x").
-//
-// It also has a `repl` function, which gives a read-eval-print loop.
-// As a special feature of this loop, the underscore ("_") is always
-// the value of the last expression.  Enter "quit" or "exit" to exit.
+//------------------------------------------------------------
+// General utility functions
 
-// Lexer states (used inside the lex function)
-State = {
-"START": 0,
-"NUMBER": 1,
-"OPERATOR": 2,
-"IDENTIFIER": 3 }
+isNumber = function(s)
+	return "0" <= s[0] <= "9"
+end function
 
-variables = {}
+isIdentifier = function(s)
+	c = s[0]
+	return ("A" <= c <= "Z") or c >= "a" or c == "_"
+end function
+
+map.get = function(key, default=null)
+	if self.hasIndex(key) then return self[key]
+	return default
+end function 
+
+
+//------------------------------------------------------------
+// A simple lexer, handling numbers, identifiers, and operators.
+// Splits a string into a list of tokens, stripping out whitespace.
 
 lex = function(exprStr)
-	result = []
+	State = { "START": 0, "NUMBER": 1, "OPERATOR": 2, "IDENTIFIER": 3 }
 	state = State.START
+	result = []
 	token = ""
 	for c in exprStr
 		if c <= " " then
 			if token then result.push token
 			state = State.START
 			token = ""
-		else if c >= "0" and c <= "9" then
+		else if "0" <= c <= "9" or c == "." then
 			if state == State.NUMBER then
-				token = token + c
+				token += c
 			else
 				if token then result.push token
 				state = State.NUMBER
 				token = c
 			end if
-		else if "+-*/^()=".indexOf(c) != null then
+		else if "+-*/%^()=".indexOf(c) != null then
 			if token then result.push token
 			state = State.OPERATOR
 			token = c
 		else
 			if state == State.IDENTIFIER then
-				token = token + c
+				token += c
 			else
 				if token then result.push token
 				state = State.IDENTIFIER
@@ -54,144 +56,235 @@ lex = function(exprStr)
 	return result
 end function
 
-eval = function(exprStr)
-	return evalAssignment(lex(exprStr))
+//------------------------------------------------------------
+// Storage for user-defined variables
+
+vars = {"pi":pi}
+
+lookupVar = function(identifier)
+	if vars.hasIndex(identifier) then return vars[identifier]
+	print "Undefined identifier: " + identifier
+	return null
 end function
 
-evalAssignment = function(tokens)
-	if tokens.len < 3 then return evalAddSub(tokens)
-	if tokens[1] != "=" then return evalAddSub(tokens)
-	varName = tokens.pull
-	if not varName or (varName[0] >= "0" and varName[0] <= "9") then
-		print "Error: assignment to numeric value"
+//------------------------------------------------------------
+// Operations: what the various parselets actually _do_.
+// As a group, these methods define whether your parser builds an AST,
+// or emits bytecode, or immediately evaluates a value, or whatever.
+Op = {}
+Op.numVal     = function(s);   return val(s); end function
+Op.getVar     = function(s)
+	if vars.hasIndex(s) then return vars[s]
+	print "Undefined variable: " + s
+	return null
+end function
+Op.setVar     = function(s,v); vars[s] = v; end function
+Op.unaryMinus = function(x);  print "unaryMinus " + x; return -x;  end function
+Op.subtract   = function(a,b); return a-b; end function
+Op.add        = function(a,b); return a+b; end function
+Op.multiply   = function(a,b); return a*b; end function
+Op.divide     = function(a,b); return a/b; end function
+Op.mod        = function(a,b); return a%b; end function
+Op.power      = function(a,b); return a^b; end function
+Op.factorial  = function(x)
+	result = x
+	while x > 1
+		x -= 1
+		result *= x
+	end while
+	return result
+end function
+
+//------------------------------------------------------------
+// Precedence levels (higher precedence binds more strongly).
+
+Precedence = {
+    "BELOW_ASSIGNMENT" : 0,
+    "ASSIGNMENT" : 1,
+    "CONDITIONAL" : 2,
+    "SUM" : 3,
+    "PRODUCT" : 4,
+    "EXPONENT" : 5,
+    "FACTORIAL" : 6,
+    "PREFIX" : 7,
+    "POSTFIX" : 8,
+    "CALL" : 9,
+}
+
+//------------------------------------------------------------
+// Parselets -- mini-parsers, each responsible for parsing one
+// certain type of thing.  Some of them are invoked by only 
+// one token; others might be invoked by many tokens, and
+// parameterized to control what they do.
+Parselet = {}
+Parselet.precedence = 0
+Parselet.operation = null
+
+PrefixParselet = new Parselet
+PrefixParselet.parse = function(tokens)
+	return self.operation(tokens.pull)
+end function
+
+UnaryOpParselet = new PrefixParselet
+UnaryOpParselet.parse = function(tokens)
+	tokens.pull  // skip operator
+	operand = evalTokens(tokens, self.precedence)
+	return self.operation(operand)
+end function
+
+InfixParselet = new Parselet
+InfixParselet.rightAssoc = false
+InfixParselet.parse = function(lhs, tokens)
+	rhs = evalTokens(tokens, self.precedence - self.rightAssoc)
+	return self.operation(lhs, rhs)
+end function
+
+PostfixParselet = new InfixParselet
+PostfixParselet.parse = function(lhs, tokens)
+	// This is a right-side unary operator, not actually a binary operator.
+	// So we don't touch the given tokens, but instead just operate on lhs.
+	return self.operation(lhs)
+end function
+
+//------------------------------------------------------------
+// Methods in this Parse collection create Parselets, properly configured
+// for each different kind of token.  In many cases, the configuration
+// includes the operation (see the Op map above) to actually perform.
+
+Parse = {}
+
+Parse.Number = new PrefixParselet
+Parse.Number.operation = @Op.numVal
+
+Parse.Identifier = new PrefixParselet
+Parse.Identifier.operation = @Op.getVar
+Parse.Identifier.assignmentOp = @Op.setVar
+Parse.Identifier.parse = function(tokens)
+	identifier = tokens.pull
+	// Peek ahead to see if the next token is '='.  
+	// If it is, then we have an assignment.
+	// Otherwise, it's a simple variable lookup.
+	if tokens and tokens[0] == "=" then
+		tokens.pull	// discard '='
+		rhs = evalTokens(tokens)
+		return self.assignmentOp(identifier, rhs)
+	else
+		return self.operation(identifier)
+	end if
+end function
+
+Parse.Group = new PrefixParselet
+Parse.Group.parse = function(tokens)
+	tokens.pull  // discard "("
+	result = evalTokens(tokens)
+	if not tokens or tokens[0] != ")" then
+		print "Unbalanced parentheses"
 		return null
 	end if
-	tokens.pull // (discard "=")
-	rhsVal = evalAddSub(tokens)
-	variables[varName] = rhsVal
-	return rhsVal
+	tokens.pull  // discard ")"
+	return result
 end function
 
-evalAddSub = function(tokens)
-	evalNext = @evalMultDiv
-	valA = evalNext(tokens)
-	if not tokens or
-	(tokens[0] != "+" and tokens[0] != "-") then return valA
-	op = tokens.pull	
-	valB = evalNext(tokens)
-	if op == "+" then		
-		return valA + valB
-	else
-		return valA - valB
-	end if
+Parse.UnaryOp = function(operation, precedence)
+	if precedence == null then precedence = precedence.PREFIX
+	result = new UnaryOpParselet
+	result.operation = @operation
+	result.precedence = precedence
+	return result
 end function
 
-evalMultDiv = function(tokens)
-	evalNext = @evalPower
-	valA = evalNext(tokens)
-	if not tokens or
-	(tokens[0] != "*" and tokens[0] != "/") then return valA
-	op = tokens.pull	
-	valB = evalNext(tokens)
-	if op == "*" then		
-		return valA * valB
-	else
-		return valA / valB
-	end if
+Parse.Binop = function(operation, precedence, rightAssoc=false)
+	result = new InfixParselet
+	result.operation = @operation
+	result.precedence = precedence
+	if rightAssoc then result.rightAssoc = true
+	return result
 end function
 
-evalPower = function(tokens)
-	evalNext = @evalParen
-	valA = evalNext(tokens)
-	if not tokens or tokens[0] != "^" then return valA
-	op = tokens.pull	
-	valB = evalNext(tokens)
-	return valA ^ valB
+Parse.PostUnary = function(operation, precedence)
+	result = new PostfixParselet
+	result.operation = @operation
+	result.precedence = precedence
+	return result
 end function
 
-evalParen = function(tokens)
-	evalNext = @evalAtom
+//------------------------------------------------------------
+// And here's where the grammar of our language is defined, as
+// a set of token effects -- i.e., the effect of each token.
+
+TokenEffect = {}
+
+effect = function(prefixParser, infixParser)
+	result = new TokenEffect
+	result.prefixParser = prefixParser
+	result.infixParser = @infixParser
+	return result
+end function
+
+tokenEffects = {}
+tokenEffects["("] = effect(Parse.Group, null)
+tokenEffects[number] = effect(Parse.Number, null)
+tokenEffects["ident"] = effect(Parse.Identifier, null)
+tokenEffects["-"] = effect(Parse.UnaryOp(@Op.unaryMinus, Precedence.PREFIX), 
+    Parse.Binop(@Op.subtract, Precedence.SUM))
+tokenEffects["+"] = effect(null, Parse.Binop(@Op.add, Precedence.SUM))
+tokenEffects["*"] = effect(null, Parse.Binop(@Op.multiply, Precedence.PRODUCT))
+tokenEffects["/"] = effect(null, Parse.Binop(@Op.divide, Precedence.PRODUCT))
+tokenEffects["%"] = effect(null, Parse.Binop(@Op.mod, Precedence.PRODUCT))
+tokenEffects["^"] = effect(null, Parse.Binop(@Op.power, Precedence.EXPONENT, true))
+tokenEffects["!"] = effect(null, Parse.PostUnary(@Op.factorial, Precedence.FACTORIAL))
+
+// Helper method to get the precedence of the infix parser associated
+// with the given token (if any).
+infixPrecedence = function(token)
+	effect = tokenEffects.get(token)
+	if not effect or not effect.infixParser then return -1
+	return effect.infixParser.precedence
+end function
+
+// Evaluate a set of tokens and return the result.
+evalTokens = function(tokens, precedence=0)
 	if not tokens then return null
-	if tokens[0] == "(" then
-		tokens.pull
-		result = evalAddSub(tokens)
-		if not tokens or tokens[0] != ")" then
-			print "Unbalanced parentheses"
-			return null
-		end if
-		tokens.pull
-		return result
+	
+	// first, check prefix parsers (for tokens that can start an expression)
+	firstTok = tokens[0]
+	effect = null
+	if isNumber(firstTok) then
+		effect = tokenEffects[number]
+	else if isIdentifier(firstTok) then
+		effect = tokenEffects.ident
 	else
-		return evalAtom(tokens)
-	end if	
-end function
-
-evalAtom = function(tokens)
-	tok = tokens.pull
-	if variables.hasIndex(tok) then
-		return variables[tok]
+		effect = tokenEffects.get(firstTok)
 	end if
-	return val(tok)
-end function
-
-repl = function
-	while true
-		inp = input("eval: ")
-		if inp == "quit" or inp == "exit" then return
-		result = eval(inp)
-		if result != null then print result
-		variables["_"] = result
+	if effect and effect.prefixParser then
+		value = effect.prefixParser.parse(tokens)
+	else
+		print "Invalid expression start: " + next
+		return null
+	end if
+	
+	// then, continue applying infix parsers, until
+	// we hit something of lower (or same?) precedence.
+	while tokens and infixPrecedence(tokens[0]) > precedence
+		operator = tokens.pull
+		effect = tokenEffects.get(operator)
+		if not effect or not effect.infixParser then break
+		value = effect.infixParser.parse(value, tokens)
 	end while
+	return value
 end function
 
-
-runUnitTests = function
-	
-	errCount = 0
-	
-	checkLex = function(exprStr, expectedList)
-		actual = lex(exprStr)
-		if actual == expectedList then return
-		print "Unit test error on """ + exprStr + """: expected " +
-		expectedList + ", but got " + actual
-		outer.errCount = outer.errCount + 1
-	end function
-	
-	checkLex "", []
-	checkLex "42", ["42"]
-	checkLex "3+8", ["3", "+", "8"]
-	
-	check = function(exprStr, expectedValue)
-		actualVal = eval(exprStr)
-		if actualVal == expectedValue then return
-		print "Unit test error on """ + exprStr + """: expected " +
-		expectedValue + ", but got " + actualVal
-		outer.errCount = outer.errCount + 1
-	end function
-	
-	check "0", 0
-	check "42", 42
-	check "3+5", 8	
-	check "6*7", 42
-	check "50/2", 25
-	check "2^3", 8
-	check "3^4", 81
-	check "2+3*4", 14
-	check "(2+3)*4", 20
-	check "12+3*(10-2)^2", 204
-	check " 3   + 2  ", 5
-	eval "x = 42"
-	check "x", 42
-	check "x+3", 45
-	
-	if errCount == 0 then
-		print "All tests passed.  WOOT!"
-	else
-		print "Unit tests found " + errCount + " errors."
-	end if
+// Evaluate a string and return the result.
+eval = function(s)
+	return evalTokens(lex(s))
 end function
 
 if locals == globals then
-	runUnitTests
-	repl
+	print "Enter expression to evaluate, or `quit` to quit."
+	while true
+		inp = input(">")
+		if inp == "quit" or inp == "exit" then break
+		result = eval(inp)
+		if result != null then print result
+	end while
 end if
