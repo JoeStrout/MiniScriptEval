@@ -59,7 +59,7 @@ end function
 //------------------------------------------------------------
 // Storage for user-defined variables
 
-vars = {"pi":pi}
+vars = {"pi":pi, "rnd":@rnd}
 
 lookupVar = function(identifier)
 	if vars.hasIndex(identifier) then return vars[identifier]
@@ -279,7 +279,32 @@ eval = function(s)
 	return evalTokens(lex(s))
 end function
 
+runUnitTests = function
+	print "Unit testing: eval"
+	
+	errorCount = 0
+	check = function(expression, expected)
+		actual = eval(expression)
+		if actual != expected then
+			print "Unit test failure on """ + expression + """: expected " + expected + ", got " + actual
+			outer.errorCount = errorCount + 1
+		end if
+	end function
+	
+	check "2+2", 4
+	check "pi", pi
+	check "2+3*4", 14
+	check "(2+3)*4", 20
+	
+	if errorCount == 0 then
+		print "All tests passed."
+	else
+		print errorCount + " error" + "s" * (errorCount!=1) + " found."
+	end if
+end function
+
 if locals == globals then
+	runUnitTests
 	print "Enter expression to evaluate, or `quit` to quit."
 	while true
 		inp = input(">")
