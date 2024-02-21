@@ -57,9 +57,15 @@ lex = function(exprStr)
 end function
 
 //------------------------------------------------------------
-// Storage for user-defined variables
+// Storage for user-defined variables,
+// initialized with some standard constants and functions
 
-vars = {"pi":pi, "rnd":@rnd}
+vars = {"pi":pi, "rnd":@rnd,
+ "round":@round, "floor":@floor, "ceil":@ceil, 
+ "log":@log, "sign":@sign, "sqrt":@sqrt,
+ "sin":@sin, "cos":@cos, "tan":@tan, 
+ "asin":@asin, "acos":@acos, "atan":@atan,
+}
 
 lookupVar = function(identifier)
 	if vars.hasIndex(identifier) then return vars[identifier]
@@ -75,7 +81,15 @@ Op = {}
 Op.numVal     = function(s);   return val(s); end function
 Op.getVar     = function(s)
 	if vars.hasIndex(s) then return vars[s]
-	print "Undefined variable: " + s
+	print "Undefined identifier: " + s
+	return null
+end function
+Op.call       = function(ident, arg)
+	if vars.hasIndex(ident) then
+		f = @vars[ident]
+		return f(arg)
+	end if
+	print "Undefined identifier: " + s
 	return null
 end function
 Op.setVar     = function(s,v); vars[s] = v; end function
@@ -159,15 +173,28 @@ Parse.Number.operation = @Op.numVal
 Parse.Identifier = new PrefixParselet
 Parse.Identifier.operation = @Op.getVar
 Parse.Identifier.assignmentOp = @Op.setVar
+Parse.Identifier.callOp = @Op.call
 Parse.Identifier.parse = function(tokens)
 	identifier = tokens.pull
-	// Peek ahead to see if the next token is '='.  
-	// If it is, then we have an assignment.
-	// Otherwise, it's a simple variable lookup.
-	if tokens and tokens[0] == "=" then
-		tokens.pull	// discard '='
+	// When we've seen an identifier, there are several possibilities:
+	// 1. It could be an assignment (next token is '=')
+	// 2. It could be a call (next token is '(')
+	// 3. Otherwise, it's a simple variable lookup.
+	nextToken = null
+	if tokens then nextToken = tokens[0]
+	if nextToken == "=" then
+		tokens.pull	 // discard "="
 		rhs = evalTokens(tokens)
 		return self.assignmentOp(identifier, rhs)
+	else if nextToken == "(" then
+		tokens.pull  // discard "("
+		arg = evalTokens(tokens)
+		if not tokens or tokens[0] != ")" then
+			print "Unbalanced parentheses"
+			return null
+		end if
+		tokens.pull  // discard ")"
+		return self.callOp(identifier, arg)
 	else
 		return self.operation(identifier)
 	end if
@@ -295,6 +322,11 @@ runUnitTests = function
 	check "pi", pi
 	check "2+3*4", 14
 	check "(2+3)*4", 20
+	check "5!", 120
+	check "200 - 5!", 80
+	check "2^2^3", 256
+	check "(2^2)^3", 64
+	check "round(cos(45*pi/180)*100)", 71
 	
 	if errorCount == 0 then
 		print "All tests passed."
@@ -307,7 +339,7 @@ if locals == globals then
 	runUnitTests
 	print "Enter expression to evaluate, or `quit` to quit."
 	while true
-		inp = input(">")
+		inp = input("eval> ")
 		if inp == "quit" or inp == "exit" then break
 		result = eval(inp)
 		if result != null then print result
