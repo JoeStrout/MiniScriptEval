@@ -262,6 +262,8 @@ tokenEffects["%"] = effect(null, Parse.Binop(@Op.mod, Precedence.PRODUCT))
 tokenEffects["^"] = effect(null, Parse.Binop(@Op.power, Precedence.EXPONENT, true))
 tokenEffects["!"] = effect(null, Parse.PostUnary(@Op.factorial, Precedence.FACTORIAL))
 
+//------------------------------------------------------------
+
 // Helper method to get the precedence of the infix parser associated
 // with the given token (if any).
 infixPrecedence = function(token)
