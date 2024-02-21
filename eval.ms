@@ -188,7 +188,8 @@ Parse.Identifier.parse = function(tokens)
 		return self.assignmentOp(identifier, rhs)
 	else if nextToken == "(" then
 		tokens.pull  // discard "("
-		arg = evalTokens(tokens)
+		arg = null
+		if tokens and tokens[0] != ")" then arg = evalTokens(tokens)
 		if not tokens or tokens[0] != ")" then
 			print "Unbalanced parentheses"
 			return null
@@ -286,7 +287,7 @@ evalTokens = function(tokens, precedence=0)
 	if effect and effect.prefixParser then
 		value = effect.prefixParser.parse(tokens)
 	else
-		print "Invalid expression start: " + next
+		print "Invalid expression start: " + firstTok
 		return null
 	end if
 	
